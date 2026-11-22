@@ -23,10 +23,13 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Install web dependencies & build static bundle
         run: |
-          npm install --legacy-peer-deps --no-audit --no-fund
-          npm run build:spck
+          bun install --frozen-lockfile || bun install
+          bun run build:spck
           rm -rf android/app/src/main/assets/www
           mkdir -p android/app/src/main/assets/www
           cp -r spck/* android/app/src/main/assets/www/
@@ -39,20 +42,32 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
-      - name: Install Android SDK 35 & Accept Licenses
+      - name: Accept Android SDK Licenses
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          SDKMANAGER=$(command -v sdkmanager || find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1 || true)
+          if [ -n "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          fi
 
-      - name: Setup Gradle
+      - name: Setup Gradle Cache
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
 
       - name: Build Debug APK
         working-directory: android
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: |
+          if command -v gradle >/dev/null 2>&1; then
+            GRADLE_BIN="gradle"
+          else
+            curl -fsSL -o /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-8.10.2-bin.zip"
+            unzip -q -o /tmp/gradle.zip -d /tmp/gradle-dist
+            GRADLE_BIN="/tmp/gradle-dist/gradle-8.10.2/bin/gradle"
+          fi
+          "$GRADLE_BIN" assembleDebug --no-daemon --stacktrace
 
       - name: Rename APK for download
         run: |
