@@ -27,7 +27,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 'd
       <button
         type="button"
         onClick={handleClick}
-        title="Install Opssy Tracks to your device"
+        title="Install NAIJA RUN to your device"
         className={
           variant === 'settings'
             ? 'py-2 px-3.5 rounded-xl bg-sky-600/20 border border-sky-400/35 hover:bg-sky-600/30 text-sky-200 font-medium text-sm transition-colors cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1.5'
@@ -71,7 +71,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 'd
               </div>
             ) : isIOS ? (
               <div className="space-y-2.5 text-xs text-slate-300 leading-relaxed">
-                <p>Install Opssy Tracks on iPhone or iPad using Safari:</p>
+                <p>Install NAIJA RUN on iPhone or iPad using Safari:</p>
                 <ol className="list-decimal list-inside space-y-1.5 text-slate-200">
                   <li>
                     Tap the <span className="font-semibold text-white">Share</span> button in Safari&apos;s toolbar.
@@ -86,7 +86,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 'd
               </div>
             ) : (
               <div className="space-y-2.5 text-xs text-slate-300 leading-relaxed">
-                <p>Install Opssy Tracks directly from your browser:</p>
+                <p>Install NAIJA RUN directly from your browser:</p>
                 <ol className="list-decimal list-inside space-y-1.5 text-slate-200">
                   <li>
                     Open your browser menu (<span className="font-semibold text-white">⋮</span> in Chrome/Edge).

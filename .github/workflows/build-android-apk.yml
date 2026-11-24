@@ -72,22 +72,22 @@ jobs:
       - name: Rename APK for download
         run: |
           mkdir -p release-apk
-          cp android/app/build/outputs/apk/debug/app-debug.apk release-apk/OpssyTracks.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk release-apk/NAIJA-RUN.apk
 
       - name: Upload APK Workflow Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OpssyTracks-APK
-          path: release-apk/OpssyTracks.apk
+          name: NAIJA-RUN-APK
+          path: release-apk/NAIJA-RUN.apk
 
       - name: Publish APK to GitHub Releases
         continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0-latest
-          name: Opssy Tracks (Android APK)
+          name: NAIJA RUN (Android APK)
           body: |
-            Automated Android APK build of Opssy Tracks.
-            Download `OpssyTracks.apk` below and open it on your Android phone to install.
-          files: release-apk/OpssyTracks.apk
+            Automated Android APK build of NAIJA RUN.
+            Download `NAIJA-RUN.apk` below and open it on your Android phone to install.
+          files: release-apk/NAIJA-RUN.apk
           make_latest: true

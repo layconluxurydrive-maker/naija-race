@@ -21,8 +21,8 @@ export default defineConfig(() => {
         ],
         manifest: {
           id: '/',
-          name: 'Opssy Tracks',
-          short_name: 'Opssy Tracks',
+          name: 'NAIJA RUN',
+          short_name: 'NAIJA RUN',
           description:
             'Real-time 3D arcade circuit car racing game with selectable tracks, drift boost physics, and AI rivals.',
           theme_color: '#0a0c10',

@@ -6,6 +6,8 @@ import { createProceduralTextures, ProceduralTextureSet } from './textures';
 import { buildCircuitTrack, TrackData } from './track';
 import {
   CameraMode,
+  CAR_COLLECTION,
+  CarSpec,
   Difficulty,
   FinishNotification,
   GamePhase,
@@ -70,7 +72,17 @@ interface ParticleSlot {
   life: number;
   maxLife: number;
   size: number;
-  isBoost: boolean;
+  colorHex: number;
+}
+
+interface NairaNotePickup {
+  x: number;
+  z: number;
+  phaseOffset: number;
+  active: boolean;
+  respawnTimer: number;
+  noteMesh: THREE.Mesh;
+  beaconMesh: THREE.Mesh;
 }
 
 export class RacingEngine {
@@ -88,9 +100,17 @@ export class RacingEngine {
 
   private racers: RacerEntity[] = [];
   private player!: RacerEntity;
+  private playerCarSpec: CarSpec = CAR_COLLECTION[0];
   private particlesMesh: THREE.InstancedMesh;
   private particles: ParticleSlot[] = [];
   private particleCursor = 0;
+
+  private nairaGroup: THREE.Group;
+  private nairaPickups: NairaNotePickup[] = [];
+  private nairaNoteGeo: THREE.BufferGeometry;
+  private nairaNoteMat: THREE.MeshStandardMaterial;
+  private nairaBeaconGeo: THREE.PlaneGeometry;
+  private nairaBeaconMat: THREE.MeshBasicMaterial;
 
   private phase: GamePhase = 'ready';
   private prePausePhase: 'countdown' | 'racing' = 'racing';
@@ -106,6 +126,10 @@ export class RacingEngine {
   private isGameOver = false;
   private finishOrderCount = 0;
   private notifications: FinishNotification[] = [];
+  private sessionNaira = 0;
+  private notesCollectedCount = 0;
+  private podiumBonusNaira = 0;
+  private lastNairaPickupAt = 0;
   private lastTelemetryPush = 0;
   private frameId = 0;
   private disposed = false;
@@ -129,15 +153,18 @@ export class RacingEngine {
 
   private onTelemetry: (t: RaceTelemetry) => void;
   private onContextLostChange?: (lost: boolean) => void;
+  private onNairaAwarded?: (amount: number) => void;
 
   constructor(
     container: HTMLElement,
     onTelemetry: (t: RaceTelemetry) => void,
-    onContextLostChange?: (lost: boolean) => void
+    onContextLostChange?: (lost: boolean) => void,
+    onNairaAwarded?: (amount: number) => void
   ) {
     this.container = container;
     this.onTelemetry = onTelemetry;
     this.onContextLostChange = onContextLostChange;
+    this.onNairaAwarded = onNairaAwarded;
     this.audio = new RacingAudio();
 
     // Detect Software WebGL (SwiftShader, llvmpipe, WARP) to tune GPU cost cleanly
@@ -218,7 +245,7 @@ export class RacingEngine {
     this.scene.add(this.track.group);
     this.applyTrackAtmosphere();
 
-    // Pre-allocated Particle Pool (Drift Tire Smoke & Boost Sparks)
+    // Pre-allocated Particle Pool (Drift Tire Smoke, Boost Sparks & Naira Burst)
     const particleCount = 72;
     const partGeo = new THREE.SphereGeometry(0.32, 6, 6);
     const partMat = new THREE.MeshBasicMaterial({
@@ -243,7 +270,7 @@ export class RacingEngine {
         life: 0,
         maxLife: 0.5,
         size: 1,
-        isBoost: false,
+        colorHex: 0xdbeafe,
       });
       _dummy.position.set(0, -50, 0);
       _dummy.scale.setScalar(0.001);
@@ -254,6 +281,39 @@ export class RacingEngine {
     }
     this.particlesMesh.instanceMatrix.needsUpdate = true;
     if (this.particlesMesh.instanceColor) this.particlesMesh.instanceColor.needsUpdate = true;
+
+    // Visible Nigerian ₦10 Naira Banknote Collectibles on the road
+    this.nairaGroup = new THREE.Group();
+    this.scene.add(this.nairaGroup);
+
+    const noteGeo = new THREE.PlaneGeometry(2.25, 1.15, 8, 1);
+    const posAttr = noteGeo.attributes.position;
+    for (let i = 0; i < posAttr.count; i++) {
+      const vx = posAttr.getX(i);
+      posAttr.setZ(i, Math.sin(vx * 1.6) * 0.14);
+    }
+    noteGeo.computeVertexNormals();
+    this.nairaNoteGeo = noteGeo;
+
+    this.nairaNoteMat = new THREE.MeshStandardMaterial({
+      map: this.textures.naira10Map,
+      emissiveMap: this.textures.naira10Map,
+      emissive: 0xffedd5,
+      emissiveIntensity: 0.34,
+      roughness: 0.42,
+      metalness: 0.08,
+      side: THREE.DoubleSide,
+    });
+
+    this.nairaBeaconGeo = new THREE.PlaneGeometry(2.8, 2.8);
+    this.nairaBeaconMat = new THREE.MeshBasicMaterial({
+      map: this.textures.nairaBeaconMap,
+      transparent: true,
+      depthWrite: false,
+      opacity: 0.88,
+    });
+
+    this.rebuildNairaPickups();
 
     // Create Racers (Player + 3 AI Opponents)
     this.initRacers(LIVERY_OPTIONS[0]);
@@ -359,9 +419,43 @@ export class RacingEngine {
   }
 
   public setPlayerLivery(livery: LiveryOption): void {
-    this.player.colorHex = livery.primaryHex;
-    this.player.mesh.setLivery(livery.colorValue, livery.accentValue);
+    const primary = livery.id === 'factory' ? this.playerCarSpec.defaultPrimaryValue : livery.colorValue;
+    const accent = livery.id === 'factory' ? this.playerCarSpec.defaultAccentValue : livery.accentValue;
+    const hex = livery.id === 'factory' ? this.playerCarSpec.defaultPrimaryHex : livery.primaryHex;
+    this.player.colorHex = hex;
+    this.player.mesh.setLivery(primary, accent);
     this.pushTelemetry(true);
+  }
+
+  public setPlayerCar(car: CarSpec, livery?: LiveryOption): void {
+    this.playerCarSpec = car;
+    const useCustom = livery && livery.id !== 'factory';
+    const primary = useCustom ? livery.colorValue : car.defaultPrimaryValue;
+    const accent = useCustom ? livery.accentValue : car.defaultAccentValue;
+    const hex = useCustom ? livery.primaryHex : car.defaultPrimaryHex;
+
+    this.scene.remove(this.player.mesh.group);
+    this.player.mesh.dispose();
+
+    const newMesh = createRaceCarModel(
+      primary,
+      accent,
+      this.textures.contactShadowMap,
+      !this.isSoftwareGl,
+      car.bodyStyle
+    );
+    newMesh.group.position.set(this.player.x, 0.04, this.player.z);
+    newMesh.group.rotation.set(0, this.player.yaw, 0);
+    this.scene.add(newMesh.group);
+
+    this.player.mesh = newMesh;
+    this.player.colorHex = hex;
+    this.pushTelemetry(true);
+  }
+
+  public playPurchaseSound(): void {
+    this.audio.unlock();
+    this.audio.playPurchaseSuccess();
   }
 
   public setDifficulty(diff: Difficulty): void {
@@ -426,6 +520,7 @@ export class RacingEngine {
     this.track = buildCircuitTrack(trackId, this.textures, this.isSoftwareGl);
     this.scene.add(this.track.group);
     this.applyTrackAtmosphere();
+    this.rebuildNairaPickups();
 
     // Clear active particles
     for (let i = 0; i < this.particles.length; i++) {
@@ -438,6 +533,58 @@ export class RacingEngine {
     this.particlesMesh.instanceMatrix.needsUpdate = true;
 
     this.resetToGrid();
+  }
+
+  private rebuildNairaPickups(): void {
+    this.nairaGroup.clear();
+    this.nairaPickups = [];
+
+    const totalLen = Math.max(200, this.track.totalLength);
+    // Space notes every ~65m around the road, skipping the grid area right behind start/finish
+    const spacingMeters = 65;
+    const noteCount = Math.max(12, Math.floor((totalLen - 85) / spacingMeters));
+    const lanePattern = [0, -3.3, 3.3, -1.8, 1.8, 0];
+
+    for (let i = 0; i < noteCount; i++) {
+      const distAlong = 52 + i * spacingMeters;
+      const t = (distAlong / totalLen) % 1;
+      const pt = this.track.curve.getPointAt(t);
+      const tan = this.track.curve.getTangentAt(t).setY(0).normalize();
+      const right = new THREE.Vector3(-tan.z, 0, tan.x).normalize();
+      const laneOffset = lanePattern[i % lanePattern.length];
+
+      const nx = pt.x + right.x * laneOffset;
+      const nz = pt.z + right.z * laneOffset;
+
+      const noteMesh = new THREE.Mesh(this.nairaNoteGeo, this.nairaNoteMat);
+      noteMesh.position.set(nx, 0.96, nz);
+      noteMesh.rotation.set(0.18, i * 0.7, 0.08);
+      this.nairaGroup.add(noteMesh);
+
+      const beaconMesh = new THREE.Mesh(this.nairaBeaconGeo, this.nairaBeaconMat);
+      beaconMesh.rotation.x = -Math.PI / 2;
+      beaconMesh.position.set(nx, 0.068, nz);
+      this.nairaGroup.add(beaconMesh);
+
+      this.nairaPickups.push({
+        x: nx,
+        z: nz,
+        phaseOffset: i * 0.65,
+        active: true,
+        respawnTimer: 0,
+        noteMesh,
+        beaconMesh,
+      });
+    }
+  }
+
+  private resetAllNairaPickups(): void {
+    for (const n of this.nairaPickups) {
+      n.active = true;
+      n.respawnTimer = 0;
+      n.noteMesh.visible = true;
+      n.beaconMesh.visible = true;
+    }
   }
 
   public setInput(patch: Partial<InputState>): void {
@@ -514,6 +661,11 @@ export class RacingEngine {
     this.isGameOver = false;
     this.finishOrderCount = 0;
     this.notifications = [];
+    this.sessionNaira = 0;
+    this.notesCollectedCount = 0;
+    this.podiumBonusNaira = 0;
+    this.lastNairaPickupAt = 0;
+    this.resetAllNairaPickups();
     this.track.setStartLights('off');
 
     // Staggered 2x2 grid calibrated in meters behind the start line
@@ -571,7 +723,16 @@ export class RacingEngine {
     this.camera.lookAt(this.cameraLookAt);
   }
 
-  private spawnParticle(x: number, y: number, z: number, vx: number, vy: number, vz: number, isBoost: boolean): void {
+  private spawnParticle(
+    x: number,
+    y: number,
+    z: number,
+    vx: number,
+    vy: number,
+    vz: number,
+    isBoost: boolean,
+    customColorHex?: number
+  ): void {
     const p = this.particles[this.particleCursor];
     this.particleCursor = (this.particleCursor + 1) % this.particles.length;
     p.active = true;
@@ -582,9 +743,9 @@ export class RacingEngine {
     p.vy = vy;
     p.vz = vz;
     p.life = 0;
-    p.maxLife = isBoost ? 0.28 : 0.48;
-    p.size = isBoost ? 0.65 : 1.05;
-    p.isBoost = isBoost;
+    p.maxLife = customColorHex !== undefined ? 0.55 : isBoost ? 0.28 : 0.48;
+    p.size = customColorHex !== undefined ? 0.85 : isBoost ? 0.65 : 1.05;
+    p.colorHex = customColorHex !== undefined ? customColorHex : isBoost ? 0x38bdf8 : 0xdbeafe;
   }
 
   private updateParticles(dt: number): void {
@@ -607,20 +768,78 @@ export class RacingEngine {
       p.y += p.vy * dt;
       p.z += p.vz * dt;
       const ratio = p.life / p.maxLife;
-      const s = p.size * (p.isBoost ? 1 - ratio * 0.65 : 0.6 + ratio * 1.4);
+      const s = p.size * (p.colorHex !== 0xdbeafe ? 1 - ratio * 0.65 : 0.6 + ratio * 1.4);
 
       _dummy.position.set(p.x, p.y, p.z);
       _dummy.scale.setScalar(s);
       _dummy.updateMatrix();
       this.particlesMesh.setMatrixAt(i, _dummy.matrix);
 
-      _color.setHex(p.isBoost ? 0x38bdf8 : 0xdbeafe);
+      _color.setHex(p.colorHex);
       this.particlesMesh.setColorAt(i, _color);
     }
 
     if (anyChanged) {
       this.particlesMesh.instanceMatrix.needsUpdate = true;
       if (this.particlesMesh.instanceColor) this.particlesMesh.instanceColor.needsUpdate = true;
+    }
+  }
+
+  private updateNairaPickups(dt: number): void {
+    const tNow = performance.now() * 0.001;
+    const pickupDistSq = 2.85 * 2.85;
+    const px = this.player.x;
+    const pz = this.player.z;
+
+    for (const note of this.nairaPickups) {
+      if (!note.active) {
+        if (this.phase === 'racing') {
+          note.respawnTimer -= dt;
+          if (note.respawnTimer <= 0) {
+            note.active = true;
+            note.noteMesh.visible = true;
+            note.beaconMesh.visible = true;
+          }
+        }
+        continue;
+      }
+
+      // Bob & spin visibly above the asphalt
+      note.noteMesh.position.y = 0.98 + Math.sin(tNow * 3.4 + note.phaseOffset) * 0.16;
+      note.noteMesh.rotation.y += dt * 1.85;
+      note.noteMesh.rotation.z = Math.sin(tNow * 2.5 + note.phaseOffset) * 0.1;
+
+      if (this.phase === 'racing') {
+        const dx = px - note.x;
+        const dz = pz - note.z;
+        if (dx * dx + dz * dz <= pickupDistSq) {
+          note.active = false;
+          note.respawnTimer = 14;
+          note.noteMesh.visible = false;
+          note.beaconMesh.visible = false;
+
+          this.sessionNaira += 10;
+          this.notesCollectedCount += 1;
+          this.lastNairaPickupAt = performance.now();
+          this.audio.playNairaCollect();
+          this.onNairaAwarded?.(10);
+
+          for (let k = 0; k < 8; k++) {
+            const ang = (k / 8) * Math.PI * 2;
+            this.spawnParticle(
+              note.x,
+              1.0,
+              note.z,
+              Math.cos(ang) * 4.5,
+              3.2 + Math.random() * 2.5,
+              Math.sin(ang) * 4.5,
+              true,
+              k % 2 === 0 ? 0x10b981 : 0xfbbf24
+            );
+          }
+          this.pushTelemetry(true);
+        }
+      }
     }
   }
 
@@ -639,19 +858,19 @@ export class RacingEngine {
     p.closestIdx = closest.sampleIndex;
     const onRoad = closest.distanceFromCenter <= this.track.roadHalfWidth + 1.1;
 
-    // Nitro boost logic
+    // Nitro boost logic (scaled by equipped car nitro efficiency)
     const wantsBoost = this.input.boost && p.nitro > 2 && this.input.throttle;
     p.isBoosting = wantsBoost;
     if (p.isBoosting) {
-      p.nitro = Math.max(0, p.nitro - 28 * dt);
+      p.nitro = Math.max(0, p.nitro - (28 / this.playerCarSpec.nitroMult) * dt);
     } else {
       // Passive slow trickle + bonus charge when drifting
-      p.nitro = Math.min(100, p.nitro + (p.isDrifting ? 24 : 3.2) * dt);
+      p.nitro = Math.min(100, p.nitro + (p.isDrifting ? 24 : 3.2) * this.playerCarSpec.nitroMult * dt);
     }
 
-    // Acceleration & Braking
-    const maxSpeed = (onRoad ? 65 : 46) + (p.isBoosting ? 16 : 0); // ~234 km/h normal, ~291 km/h boost
-    const accelForce = (p.isBoosting ? 58 : 34) * (onRoad ? 1 : 0.78);
+    // Acceleration & Braking (scaled by equipped car speed & accel stats)
+    const maxSpeed = ((onRoad ? 65 : 46) * this.playerCarSpec.speedMult) + (p.isBoosting ? 16 : 0);
+    const accelForce = ((p.isBoosting ? 58 : 34) * this.playerCarSpec.accelMult) * (onRoad ? 1 : 0.78);
     p.isBraking = false;
 
     if (this.input.throttle) {
@@ -672,7 +891,7 @@ export class RacingEngine {
 
     forwardVel = THREE.MathUtils.clamp(forwardVel, -18, maxSpeed);
 
-    // Steering & Drift Dynamics (respects SteeringStyle: grip | arcade | drift)
+    // Steering & Drift Dynamics (respects SteeringStyle: grip | arcade | drift + car handlingMult)
     const digitalSteer = (this.input.left ? 1 : 0) - (this.input.right ? 1 : 0);
     const steerInput =
       digitalSteer !== 0
@@ -700,15 +919,18 @@ export class RacingEngine {
       this.steeringStyle === 'grip' ? 2.15 : this.steeringStyle === 'drift' ? 2.2 : 1.95;
     const driftTurn =
       this.steeringStyle === 'grip' ? 2.45 : this.steeringStyle === 'drift' ? 2.8 : 2.55;
+    const handlingFactor = 0.85 + this.playerCarSpec.handlingMult * 0.15;
     const turnRate =
-      (isDrifting ? driftTurn : baseTurn) * this.steeringSensitivity * speedFactor * highSpeedDamp;
+      (isDrifting ? driftTurn : baseTurn) * this.steeringSensitivity * handlingFactor * speedFactor * highSpeedDamp;
     p.yaw += p.steerAngle * turnRate * reverseSign * dt;
 
     // Lateral tire grip (tight on Grip, balanced on Arcade, tail-happy on Drift)
     const normalGrip =
-      this.steeringStyle === 'grip' ? 13.5 : this.steeringStyle === 'drift' ? 5.6 : 9.2;
+      (this.steeringStyle === 'grip' ? 13.5 : this.steeringStyle === 'drift' ? 5.6 : 9.2) *
+      this.playerCarSpec.handlingMult;
     const driftGrip =
-      this.steeringStyle === 'grip' ? 4.8 : this.steeringStyle === 'drift' ? 2.1 : 3.2;
+      (this.steeringStyle === 'grip' ? 4.8 : this.steeringStyle === 'drift' ? 2.1 : 3.2) *
+      this.playerCarSpec.handlingMult;
     const gripDecay = isDrifting ? driftGrip : normalGrip;
     lateralVel *= Math.exp(-gripDecay * dt);
 
@@ -940,6 +1162,20 @@ export class RacingEngine {
         } else {
           this.audio.playFinishFanfare();
         }
+        // Podium bonus Naira for finishing P1..P3
+        const bonus =
+          this.finishOrderCount === 1
+            ? 100
+            : this.finishOrderCount === 2
+              ? 50
+              : this.finishOrderCount === 3
+                ? 25
+                : 0;
+        if (bonus > 0) {
+          this.podiumBonusNaira = bonus;
+          this.sessionNaira += bonus;
+          this.onNairaAwarded?.(bonus);
+        }
         this.pushTelemetry(true);
       }
       return;
@@ -957,6 +1193,7 @@ export class RacingEngine {
       r.lapStartTimeMs = this.raceElapsedMs;
       if (r.isPlayer) {
         this.audio.playLapChime();
+        this.resetAllNairaPickups();
       }
     }
   }
@@ -1113,6 +1350,10 @@ export class RacingEngine {
       steerAxis: this.player.steerAngle,
       isGameOver: this.isGameOver,
       notifications: [...this.notifications],
+      sessionNaira: this.sessionNaira,
+      notesCollectedCount: this.notesCollectedCount,
+      podiumBonusNaira: this.podiumBonusNaira,
+      lastNairaPickupAt: this.lastNairaPickupAt,
     });
   }
 
@@ -1210,6 +1451,7 @@ export class RacingEngine {
       }
 
       if (this.phase !== 'paused') {
+        this.updateNairaPickups(dt);
         this.updateParticles(dt);
         this.updateCamera(dt);
       }
@@ -1264,6 +1506,10 @@ export class RacingEngine {
     for (const r of this.racers) {
       r.mesh.dispose();
     }
+    this.nairaNoteGeo.dispose();
+    this.nairaNoteMat.dispose();
+    this.nairaBeaconGeo.dispose();
+    this.nairaBeaconMat.dispose();
     this.particlesMesh.geometry.dispose();
     (this.particlesMesh.material as THREE.Material).dispose();
     this.renderer.dispose();

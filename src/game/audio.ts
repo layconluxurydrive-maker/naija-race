@@ -195,6 +195,18 @@ export class RacingAudio {
     window.setTimeout(() => this.playTone(233.08, 0.45, 'sawtooth', 0.18), 350);
   }
 
+  public playNairaCollect(): void {
+    this.playTone(987.77, 0.08, 'sine', 0.18);
+    window.setTimeout(() => this.playTone(1318.51, 0.16, 'triangle', 0.2), 60);
+  }
+
+  public playPurchaseSuccess(): void {
+    this.playTone(587.33, 0.12, 'triangle', 0.22);
+    window.setTimeout(() => this.playTone(739.99, 0.12, 'triangle', 0.22), 90);
+    window.setTimeout(() => this.playTone(880.0, 0.14, 'triangle', 0.22), 180);
+    window.setTimeout(() => this.playTone(1174.66, 0.34, 'triangle', 0.26), 270);
+  }
+
   public dispose(): void {
     if (this.ctx) {
       void this.ctx.close();

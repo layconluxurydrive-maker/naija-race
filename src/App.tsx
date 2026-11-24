@@ -6,9 +6,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { RaceHUD } from './components/RaceHUD';
 import { RacingEngine } from './game/RacingEngine';
+import { useGarageStore } from './hooks/useGarageStore';
 import { useMobileLandscape } from './hooks/useMobileLandscape';
 import {
   CameraMode,
+  CarSpec,
   Difficulty,
   InputState,
   LIVERY_OPTIONS,
@@ -44,11 +46,44 @@ const INITIAL_TELEMETRY: RaceTelemetry = {
   steerAxis: 0,
   isGameOver: false,
   notifications: [],
+  sessionNaira: 0,
+  notesCollectedCount: 0,
+  podiumBonusNaira: 0,
+  lastNairaPickupAt: 0,
 };
+
+interface DeviceOrientationEventWithPermission {
+  requestPermission?: () => Promise<'granted' | 'denied'>;
+}
 
 export default function App() {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<RacingEngine | null>(null);
+
+  const {
+    nairaBalance,
+    unlockedCarIds,
+    selectedCar,
+    addNaira,
+    buyCar,
+    selectCar,
+  } = useGarageStore();
+
+  const addNairaRef = useRef(addNaira);
+  addNairaRef.current = addNaira;
+
+  const initialCarRef = useRef(selectedCar);
+
+  const {
+    isTouchDevice,
+    isIOS,
+    isApkApp,
+    isPortrait,
+    canLockOrientation,
+    portraitDismissed,
+    dismissPortraitPrompt,
+    requestLandscape,
+  } = useMobileLandscape();
 
   const [telemetry, setTelemetry] = useState<RaceTelemetry>(INITIAL_TELEMETRY);
   const [minimapPath, setMinimapPath] = useState<Array<{ x: number; y: number }>>([]);
@@ -57,7 +92,9 @@ export default function App() {
   const [difficulty, setDifficulty] = useState<Difficulty>('casual');
   const [laps, setLaps] = useState<number>(3);
   const [steeringStyle, setSteeringStyle] = useState<SteeringStyle>('arcade');
-  const [steeringInput, setSteeringInput] = useState<SteeringInputMode>('keyboard');
+  const [steeringInput, setSteeringInput] = useState<SteeringInputMode>(() =>
+    isTouchDevice || isApkApp ? 'onscreen' : 'keyboard'
+  );
   const [steeringSensitivity, setSteeringSensitivity] = useState<number>(1.0);
   const [volume, setVolume] = useState<number>(0.7);
   const [cameraMode, setCameraMode] = useState<CameraMode>('chase');
@@ -65,17 +102,16 @@ export default function App() {
   const [hudCollapsed, setHudCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [trackSelectOpen, setTrackSelectOpen] = useState(false);
+  const [garageOpen, setGarageOpen] = useState(false);
+  const [tiltError, setTiltError] = useState<string | null>(null);
   const [contextLost, setContextLost] = useState(false);
 
-  const {
-    isTouchDevice,
-    isIOS,
-    isPortrait,
-    canLockOrientation,
-    portraitDismissed,
-    dismissPortraitPrompt,
-    requestLandscape,
-  } = useMobileLandscape();
+  // Never keep keyboard/mouse steering selected in Android APK or touch devices
+  useEffect(() => {
+    if ((isApkApp || isTouchDevice) && (steeringInput === 'keyboard' || steeringInput === 'mouse')) {
+      setSteeringInput('onscreen');
+    }
+  }, [isApkApp, isTouchDevice, steeringInput]);
 
   // Initialize Three.js WebGL RacingEngine once inside isolated ref container
   useEffect(() => {
@@ -85,8 +121,10 @@ export default function App() {
     const engine = new RacingEngine(
       mount,
       (t) => setTelemetry(t),
-      (lost) => setContextLost(lost)
+      (lost) => setContextLost(lost),
+      (amount) => addNairaRef.current(amount)
     );
+    engine.setPlayerCar(initialCarRef.current, LIVERY_OPTIONS[0]);
     engineRef.current = engine;
     setMinimapPath(engine.getMinimapPathPoints());
 
@@ -143,6 +181,7 @@ export default function App() {
           if (down && !e.repeat) {
             setSettingsOpen(false);
             setTrackSelectOpen(false);
+            setGarageOpen(false);
             engine.togglePause();
           }
           break;
@@ -150,6 +189,7 @@ export default function App() {
           if (down && !e.repeat) {
             setSettingsOpen(false);
             setTrackSelectOpen(false);
+            setGarageOpen(false);
             engine.startRace();
           }
           break;
@@ -185,27 +225,28 @@ export default function App() {
     };
   }, []);
 
-  // Mouse Steering listener when steeringInput === 'mouse'
+  // Mouse Steering listener when steeringInput === 'mouse' (desktop only)
   useEffect(() => {
     const engine = engineRef.current;
-    if (steeringInput !== 'mouse') {
-      engine?.setInput({ analogSteer: null });
+    if (steeringInput !== 'mouse' || isApkApp || isTouchDevice) {
+      if (steeringInput !== 'tilt') {
+        engine?.setInput({ analogSteer: null });
+      }
       return;
     }
 
     const onMouseMove = (e: MouseEvent) => {
-      if (settingsOpen || trackSelectOpen) return;
+      if (settingsOpen || trackSelectOpen || garageOpen) return;
       const halfW = window.innerWidth * 0.5 || 1;
       const normX = (e.clientX - halfW) / (halfW * 0.65);
       const clamped = Math.max(-1, Math.min(1, normX));
-      // Positive steer is Left (+1), so negate clientX delta, with small center deadzone
       const deadzone = 0.05;
       const steer = Math.abs(clamped) < deadzone ? 0 : -clamped;
       engineRef.current?.setInput({ analogSteer: steer });
     };
 
     const onMouseDown = (e: MouseEvent) => {
-      if (settingsOpen || trackSelectOpen) return;
+      if (settingsOpen || trackSelectOpen || garageOpen) return;
       const target = e.target as HTMLElement | null;
       if (target?.closest('button, input, a')) return;
       if (e.button === 0) engineRef.current?.setInput({ throttle: true });
@@ -235,7 +276,63 @@ export default function App() {
       window.removeEventListener('contextmenu', onContextMenu);
       engineRef.current?.setInput({ analogSteer: null, throttle: false, brake: false });
     };
-  }, [steeringInput, settingsOpen, trackSelectOpen]);
+  }, [steeringInput, settingsOpen, trackSelectOpen, garageOpen, isApkApp, isTouchDevice]);
+
+  // Device Tilt Steering listener when steeringInput === 'tilt'
+  useEffect(() => {
+    if (steeringInput !== 'tilt') {
+      if (steeringInput !== 'mouse') {
+        engineRef.current?.setInput({ analogSteer: null });
+      }
+      return;
+    }
+
+    const onOrientation = (e: DeviceOrientationEvent) => {
+      if (settingsOpen || trackSelectOpen || garageOpen) return;
+      const beta = typeof e.beta === 'number' ? e.beta : 0;
+      const gamma = typeof e.gamma === 'number' ? e.gamma : 0;
+
+      const winOrientation = (window as unknown as { orientation?: number }).orientation;
+      const angle =
+        typeof screen !== 'undefined' && typeof screen.orientation?.angle === 'number'
+          ? screen.orientation.angle
+          : typeof winOrientation === 'number'
+            ? winOrientation
+            : window.innerWidth >= window.innerHeight
+              ? 90
+              : 0;
+
+      // Positive steer = Left (+1), Negative steer = Right (-1)
+      let tiltDeg = 0;
+      const normAngle = ((angle % 360) + 360) % 360;
+      if (normAngle === 90) {
+        tiltDeg = -beta;
+      } else if (normAngle === 270) {
+        tiltDeg = beta;
+      } else if (normAngle === 180) {
+        tiltDeg = gamma;
+      } else {
+        tiltDeg = -gamma;
+      }
+
+      const deadzone = 4;
+      const maxRange = 26;
+      const absDeg = Math.abs(tiltDeg);
+      if (absDeg <= deadzone) {
+        engineRef.current?.setInput({ analogSteer: 0 });
+        return;
+      }
+      const magnitude = Math.min(1, (absDeg - deadzone) / maxRange);
+      const steer = Math.sign(tiltDeg) * magnitude;
+      engineRef.current?.setInput({ analogSteer: steer });
+    };
+
+    window.addEventListener('deviceorientation', onOrientation);
+    return () => {
+      window.removeEventListener('deviceorientation', onOrientation);
+      engineRef.current?.setInput({ analogSteer: null });
+    };
+  }, [steeringInput, settingsOpen, trackSelectOpen, garageOpen]);
 
   const handleSelectTrack = useCallback((trackId: TrackId) => {
     setSelectedTrackId(trackId);
@@ -249,6 +346,25 @@ export default function App() {
     setSelectedLivery(livery);
     engineRef.current?.setPlayerLivery(livery);
   }, []);
+
+  const handleSelectCar = useCallback((car: CarSpec) => {
+    const picked = selectCar(car.id);
+    if (!picked) return;
+    setSelectedLivery(LIVERY_OPTIONS[0]);
+    engineRef.current?.setPlayerCar(picked, LIVERY_OPTIONS[0]);
+  }, [selectCar]);
+
+  const handleBuyCar = useCallback(
+    (car: CarSpec) => {
+      const res = buyCar(car.id);
+      if (res.ok && res.car) {
+        setSelectedLivery(LIVERY_OPTIONS[0]);
+        engineRef.current?.setPlayerCar(res.car, LIVERY_OPTIONS[0]);
+        engineRef.current?.playPurchaseSound();
+      }
+    },
+    [buyCar]
+  );
 
   const handleSelectDifficulty = useCallback((diff: Difficulty) => {
     setDifficulty(diff);
@@ -265,7 +381,29 @@ export default function App() {
     engineRef.current?.setSteeringStyle(style);
   }, []);
 
-  const handleSelectSteeringInput = useCallback((mode: SteeringInputMode) => {
+  const handleSelectSteeringInput = useCallback(async (mode: SteeringInputMode) => {
+    setTiltError(null);
+    if (mode === 'tilt') {
+      if (typeof window === 'undefined' || !('DeviceOrientationEvent' in window)) {
+        setTiltError('Tilt sensors are not available on this device.');
+        return;
+      }
+      const DevOrient = window.DeviceOrientationEvent as unknown as DeviceOrientationEventWithPermission;
+      if (typeof DevOrient?.requestPermission === 'function') {
+        try {
+          const result = await DevOrient.requestPermission();
+          if (result !== 'granted') {
+            setTiltError('Motion permission denied. Using touch buttons.');
+            setSteeringInput('onscreen');
+            return;
+          }
+        } catch {
+          setTiltError('Could not access tilt sensor.');
+          setSteeringInput('onscreen');
+          return;
+        }
+      }
+    }
     setSteeringInput(mode);
   }, []);
 
@@ -274,17 +412,20 @@ export default function App() {
     engineRef.current?.setSteeringSensitivity(sens);
   }, []);
 
-  const handleChangeVolume = useCallback((vol: number) => {
-    setVolume(vol);
-    if (vol > 0 && muted) {
-      setMuted(false);
-      engineRef.current?.setMuted(false);
-    } else if (vol === 0 && !muted) {
-      setMuted(true);
-      engineRef.current?.setMuted(true);
-    }
-    engineRef.current?.setVolume(vol);
-  }, [muted]);
+  const handleChangeVolume = useCallback(
+    (vol: number) => {
+      setVolume(vol);
+      if (vol > 0 && muted) {
+        setMuted(false);
+        engineRef.current?.setMuted(false);
+      } else if (vol === 0 && !muted) {
+        setMuted(true);
+        engineRef.current?.setMuted(true);
+      }
+      engineRef.current?.setVolume(vol);
+    },
+    [muted]
+  );
 
   const handleSelectCamera = useCallback((mode: CameraMode) => {
     setCameraMode(mode);
@@ -301,6 +442,7 @@ export default function App() {
 
   const handleToggleSettings = useCallback(() => {
     setTrackSelectOpen(false);
+    setGarageOpen(false);
     setSettingsOpen((prev) => {
       const next = !prev;
       if (next && (telemetry.phase === 'racing' || telemetry.phase === 'countdown')) {
@@ -312,7 +454,20 @@ export default function App() {
 
   const handleToggleTrackSelect = useCallback(() => {
     setSettingsOpen(false);
+    setGarageOpen(false);
     setTrackSelectOpen((prev) => {
+      const next = !prev;
+      if (next && (telemetry.phase === 'racing' || telemetry.phase === 'countdown')) {
+        engineRef.current?.pauseRace();
+      }
+      return next;
+    });
+  }, [telemetry.phase]);
+
+  const handleToggleGarage = useCallback(() => {
+    setSettingsOpen(false);
+    setTrackSelectOpen(false);
+    setGarageOpen((prev) => {
       const next = !prev;
       if (next && (telemetry.phase === 'racing' || telemetry.phase === 'countdown')) {
         engineRef.current?.pauseRace();
@@ -324,6 +479,7 @@ export default function App() {
   const handleStartRace = useCallback(() => {
     setSettingsOpen(false);
     setTrackSelectOpen(false);
+    setGarageOpen(false);
     if (isTouchDevice) {
       void requestLandscape();
     }
@@ -337,18 +493,21 @@ export default function App() {
   const handleResumeRace = useCallback(() => {
     setSettingsOpen(false);
     setTrackSelectOpen(false);
+    setGarageOpen(false);
     engineRef.current?.resumeRace();
   }, []);
 
   const handleRestartRace = useCallback(() => {
     setSettingsOpen(false);
     setTrackSelectOpen(false);
+    setGarageOpen(false);
     engineRef.current?.startRace();
   }, []);
 
   const handleBackToGrid = useCallback(() => {
     setSettingsOpen(false);
     setTrackSelectOpen(false);
+    setGarageOpen(false);
     engineRef.current?.resetToGrid();
   }, []);
 
@@ -382,6 +541,9 @@ export default function App() {
         minimapPath={minimapPath}
         selectedTrackId={selectedTrackId}
         selectedLivery={selectedLivery}
+        selectedCar={selectedCar}
+        unlockedCarIds={unlockedCarIds}
+        nairaBalance={nairaBalance}
         difficulty={difficulty}
         laps={laps}
         steeringStyle={steeringStyle}
@@ -393,8 +555,11 @@ export default function App() {
         hudCollapsed={hudCollapsed}
         settingsOpen={settingsOpen}
         trackSelectOpen={trackSelectOpen}
+        garageOpen={garageOpen}
+        tiltError={tiltError}
         isTouchDevice={isTouchDevice}
         isIOS={isIOS}
+        isApkApp={isApkApp}
         isPortrait={isPortrait}
         canLockOrientation={canLockOrientation}
         portraitDismissed={portraitDismissed}
@@ -404,10 +569,14 @@ export default function App() {
         onDismissPortrait={dismissPortraitPrompt}
         onSelectTrack={handleSelectTrack}
         onSelectLivery={handleSelectLivery}
+        onSelectCar={handleSelectCar}
+        onBuyCar={handleBuyCar}
         onSelectDifficulty={handleSelectDifficulty}
         onSelectLaps={handleSelectLaps}
         onSelectSteeringStyle={handleSelectSteeringStyle}
-        onSelectSteeringInput={handleSelectSteeringInput}
+        onSelectSteeringInput={(mode) => {
+          void handleSelectSteeringInput(mode);
+        }}
         onSelectSensitivity={handleSelectSensitivity}
         onChangeVolume={handleChangeVolume}
         onSelectCamera={handleSelectCamera}
@@ -417,6 +586,8 @@ export default function App() {
         onCloseSettings={() => setSettingsOpen(false)}
         onToggleTrackSelect={handleToggleTrackSelect}
         onCloseTrackSelect={() => setTrackSelectOpen(false)}
+        onToggleGarage={handleToggleGarage}
+        onCloseGarage={() => setGarageOpen(false)}
         onStartRace={handleStartRace}
         onPauseRace={handlePauseRace}
         onResumeRace={handleResumeRace}

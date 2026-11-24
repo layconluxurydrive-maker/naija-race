@@ -24,9 +24,17 @@ function detectIOS(): boolean {
   );
 }
 
+function detectApkApp(): boolean {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname;
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+  return host === 'appassets.androidplatform.net' || /;\s*wv\)/i.test(ua);
+}
+
 export function useMobileLandscape() {
   const [isTouchDevice, setIsTouchDevice] = useState<boolean>(detectTouchDevice);
   const [isIOS] = useState<boolean>(detectIOS);
+  const [isApkApp] = useState<boolean>(detectApkApp);
   const [isPortrait, setIsPortrait] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.innerHeight > window.innerWidth : false
   );
@@ -102,6 +110,7 @@ export function useMobileLandscape() {
   return {
     isTouchDevice,
     isIOS,
+    isApkApp,
     isPortrait,
     canLockOrientation,
     portraitDismissed,

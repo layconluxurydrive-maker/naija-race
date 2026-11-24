@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Camera,
+  CarFront,
   ChevronDown,
   ChevronUp,
   Compass,
@@ -17,6 +18,7 @@ import {
 import { TRACK_SUMMARIES } from '../game/trackPresets';
 import {
   CameraMode,
+  CarSpec,
   Difficulty,
   InputState,
   LIVERY_OPTIONS,
@@ -27,6 +29,7 @@ import {
   TrackId,
 } from '../game/types';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { GarageModal } from './GarageModal';
 import { Minimap } from './Minimap';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -35,6 +38,9 @@ interface RaceHUDProps {
   minimapPath: Array<{ x: number; y: number }>;
   selectedTrackId: TrackId;
   selectedLivery: LiveryOption;
+  selectedCar: CarSpec;
+  unlockedCarIds: string[];
+  nairaBalance: number;
   difficulty: Difficulty;
   laps: number;
   steeringStyle: SteeringStyle;
@@ -46,8 +52,11 @@ interface RaceHUDProps {
   hudCollapsed: boolean;
   settingsOpen: boolean;
   trackSelectOpen: boolean;
+  garageOpen: boolean;
+  tiltError: string | null;
   isTouchDevice: boolean;
   isIOS: boolean;
+  isApkApp: boolean;
   isPortrait: boolean;
   canLockOrientation: boolean;
   portraitDismissed: boolean;
@@ -55,6 +64,8 @@ interface RaceHUDProps {
   onDismissPortrait: () => void;
   onSelectTrack: (trackId: TrackId) => void;
   onSelectLivery: (livery: LiveryOption) => void;
+  onSelectCar: (car: CarSpec) => void;
+  onBuyCar: (car: CarSpec) => void;
   onSelectDifficulty: (diff: Difficulty) => void;
   onSelectLaps: (laps: number) => void;
   onSelectSteeringStyle: (style: SteeringStyle) => void;
@@ -68,6 +79,8 @@ interface RaceHUDProps {
   onCloseSettings: () => void;
   onToggleTrackSelect: () => void;
   onCloseTrackSelect: () => void;
+  onToggleGarage: () => void;
+  onCloseGarage: () => void;
   onStartRace: () => void;
   onPauseRace: () => void;
   onResumeRace: () => void;
@@ -98,6 +111,9 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
   minimapPath,
   selectedTrackId,
   selectedLivery,
+  selectedCar,
+  unlockedCarIds,
+  nairaBalance,
   difficulty,
   laps,
   steeringStyle,
@@ -109,8 +125,11 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
   hudCollapsed,
   settingsOpen,
   trackSelectOpen,
+  garageOpen,
+  tiltError,
   isTouchDevice,
   isIOS,
+  isApkApp,
   isPortrait,
   canLockOrientation,
   portraitDismissed,
@@ -118,6 +137,8 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
   onDismissPortrait,
   onSelectTrack,
   onSelectLivery,
+  onSelectCar,
+  onBuyCar,
   onSelectDifficulty,
   onSelectLaps,
   onSelectSteeringStyle,
@@ -131,6 +152,8 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
   onCloseSettings,
   onToggleTrackSelect,
   onCloseTrackSelect,
+  onToggleGarage,
+  onCloseGarage,
   onStartRace,
   onPauseRace,
   onResumeRace,
@@ -143,13 +166,19 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
   const isOnline = useOnlineStatus();
   const activeTrackSummary =
     TRACK_SUMMARIES.find((t) => t.id === selectedTrackId) ?? TRACK_SUMMARIES[0];
+  const anyModalOpen = settingsOpen || trackSelectOpen || garageOpen;
   const showPortraitPrompt =
-    isTouchDevice && isPortrait && !portraitDismissed && !settingsOpen && !trackSelectOpen;
-  const showTouchControls =
+    isTouchDevice && isPortrait && !portraitDismissed && !anyModalOpen;
+  const hideDesktopInputs = isApkApp || isTouchDevice;
+  const showTouchPedals =
     phase === 'racing' &&
-    !settingsOpen &&
-    !trackSelectOpen &&
-    (steeringInput === 'onscreen' || (isTouchDevice && steeringInput !== 'mouse'));
+    !anyModalOpen &&
+    (steeringInput === 'onscreen' ||
+      steeringInput === 'tilt' ||
+      (isTouchDevice && steeringInput !== 'mouse'));
+  const showTouchSteerButtons = showTouchPedals && steeringInput !== 'tilt';
+  const recentNairaFlash =
+    telemetry.lastNairaPickupAt > 0 && performance.now() - telemetry.lastNairaPickupAt < 1400;
 
   return (
     <div className="pointer-events-none fixed inset-0 z-10 flex flex-col justify-between pt-[max(0.65rem,env(safe-area-inset-top))] pb-[max(0.65rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:p-4 [@media(max-height:480px)]:py-2">
@@ -160,10 +189,10 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
       )}
       {/* Top Row: Compact Telemetry Strip (Left) + Live Minimap (Right) */}
       <div className="flex items-start justify-between gap-4">
-        <div className="pointer-events-auto bg-[#0a0c10]/88 border border-white/10 rounded-xl px-4 py-3 flex items-center gap-5 shadow-lg">
+        <div className="pointer-events-auto bg-[#0a0c10]/88 border border-white/10 rounded-xl px-3.5 sm:px-4 py-2.5 sm:py-3 flex items-center gap-4 sm:gap-5 shadow-lg">
           <div>
             <h1 className="font-display text-base sm:text-lg font-bold tracking-wide text-white leading-tight whitespace-nowrap">
-              Opssy Tracks
+              NAIJA RUN
             </h1>
             <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5 whitespace-nowrap">
               <span className="text-slate-200 font-medium">{telemetry.trackName}</span>
@@ -178,7 +207,7 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
 
           <div className="h-8 w-px bg-white/10 hidden sm:block" />
 
-          <div className="flex items-center gap-5">
+          <div className="flex items-center gap-4 sm:gap-5">
             <div>
               <div className="text-[11px] text-slate-400">Position</div>
               <div className="font-display text-xl font-bold text-amber-400 leading-none mt-0.5 tabular-nums">
@@ -192,6 +221,20 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
               <div className="font-display text-xl font-bold text-white leading-none mt-0.5 tabular-nums">
                 {telemetry.lap}
                 <span className="text-xs font-medium text-slate-400">/{telemetry.totalLaps}</span>
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[11px] text-slate-400">Naira</div>
+              <div className="flex items-baseline gap-1.5 mt-0.5">
+                <span className="font-telemetry text-base sm:text-lg font-bold text-emerald-400 leading-none tabular-nums">
+                  ₦{nairaBalance.toLocaleString()}
+                </span>
+                {recentNairaFlash && (
+                  <span className="font-telemetry text-xs font-bold text-amber-300 leading-none">
+                    +₦10
+                  </span>
+                )}
               </div>
             </div>
 
@@ -217,7 +260,7 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
       </div>
 
       {/* Live Rival Finish Notifications (non-blocking, top-center) */}
-      {telemetry.notifications.length > 0 && !settingsOpen && !trackSelectOpen && (
+      {telemetry.notifications.length > 0 && !anyModalOpen && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-1.5 pointer-events-none">
           {telemetry.notifications.map((n) => (
             <div
@@ -273,7 +316,18 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
           </div>
         )}
 
-        {trackSelectOpen && !settingsOpen && (
+        {garageOpen && !settingsOpen && !trackSelectOpen && (
+          <GarageModal
+            nairaBalance={nairaBalance}
+            unlockedCarIds={unlockedCarIds}
+            selectedCarId={selectedCar.id}
+            onSelectCar={onSelectCar}
+            onBuyCar={onBuyCar}
+            onClose={onCloseGarage}
+          />
+        )}
+
+        {trackSelectOpen && !settingsOpen && !garageOpen && (
           <div className="pointer-events-auto bg-[#0a0c10]/96 border border-white/15 rounded-2xl p-5 sm:p-6 w-full max-w-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/10 pb-3 mb-4">
               <div>
@@ -416,7 +470,10 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
                         className={`w-7 h-7 rounded-lg border transition-transform cursor-pointer ${
                           active ? 'border-white scale-110' : 'border-white/20 opacity-80 hover:opacity-100'
                         }`}
-                        style={{ backgroundColor: liv.primaryHex }}
+                        style={{
+                          backgroundColor:
+                            liv.id === 'factory' ? selectedCar.defaultPrimaryHex : liv.primaryHex,
+                        }}
                       />
                     );
                   })}
@@ -497,31 +554,41 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
                 </p>
               </div>
 
-              {/* Steering Control Input */}
-              <div className="flex items-center justify-between gap-4">
-                <span className="text-slate-300 font-medium">Steering Input</span>
-                <div className="flex items-center gap-1 p-1 bg-white/5 rounded-lg">
-                  {(
-                    [
-                      { id: 'keyboard', label: 'Keys' },
-                      { id: 'mouse', label: 'Mouse' },
-                      { id: 'onscreen', label: 'Buttons' },
-                    ] as Array<{ id: SteeringInputMode; label: string }>
-                  ).map((opt) => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => onSelectSteeringInput(opt.id)}
-                      className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
-                        steeringInput === opt.id
-                          ? 'bg-white text-slate-950'
-                          : 'text-slate-300 hover:text-white'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
+              {/* Steering Control Input (hide Keys and Mouse in Android APK / mobile touch devices) */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-slate-300 font-medium">Steering Input</span>
+                  <div className="flex items-center gap-1 p-1 bg-white/5 rounded-lg">
+                    {(hideDesktopInputs
+                      ? ([
+                          { id: 'onscreen', label: 'Buttons' },
+                          { id: 'tilt', label: 'Tilt' },
+                        ] as Array<{ id: SteeringInputMode; label: string }>)
+                      : ([
+                          { id: 'keyboard', label: 'Keys' },
+                          { id: 'mouse', label: 'Mouse' },
+                          { id: 'onscreen', label: 'Buttons' },
+                          { id: 'tilt', label: 'Tilt' },
+                        ] as Array<{ id: SteeringInputMode; label: string }>)
+                    ).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => onSelectSteeringInput(opt.id)}
+                        className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                          steeringInput === opt.id
+                            ? 'bg-white text-slate-950'
+                            : 'text-slate-300 hover:text-white'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
+                {tiltError && steeringInput === 'tilt' && (
+                  <p className="text-[11px] text-amber-400 text-right">{tiltError}</p>
+                )}
               </div>
 
               {/* Steering Sensitivity */}
@@ -594,13 +661,26 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
 
               {/* Controls Legend */}
               <div className="border-t border-white/10 pt-3 text-xs text-slate-400 flex flex-wrap gap-x-4 gap-y-1">
-                <span>W/A/S/D or Arrows: Drive</span>
-                <span>Shift: Drift</span>
-                <span>Space: Boost</span>
-                <span>C: Camera</span>
-                <span>P: Pause</span>
-                <span>R: Restart</span>
-                <span>F: Reset Car</span>
+                {hideDesktopInputs ? (
+                  <>
+                    <span>
+                      {steeringInput === 'tilt'
+                        ? 'Tilt Phone: Steer Left / Right'
+                        : 'Buttons: Tap L / R to Steer'}
+                    </span>
+                    <span>Gas / Brake / Boost Pedals: Speed</span>
+                  </>
+                ) : (
+                  <>
+                    <span>W/A/S/D or Arrows: Drive</span>
+                    <span>Shift: Drift</span>
+                    <span>Space: Boost</span>
+                    <span>C: Camera</span>
+                    <span>P: Pause</span>
+                    <span>R: Restart</span>
+                    <span>F: Reset Car</span>
+                  </>
+                )}
               </div>
             </div>
 
@@ -640,7 +720,7 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
           </div>
         )}
 
-        {!settingsOpen && !trackSelectOpen && !showPortraitPrompt && phase === 'paused' && (
+        {!anyModalOpen && !showPortraitPrompt && phase === 'paused' && (
           <div className="pointer-events-auto bg-[#0a0c10]/95 border border-white/15 rounded-2xl p-5 sm:p-6 w-full max-w-xs max-h-[calc(100dvh-2rem)] overflow-y-auto text-center shadow-2xl">
             <h2 className="font-display text-2xl font-bold text-white">Race Paused</h2>
             <p className="text-xs text-slate-400 mt-1 mb-5">
@@ -670,6 +750,13 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
               </button>
               <button
                 type="button"
+                onClick={onToggleGarage}
+                className="w-full py-2 px-4 rounded-xl bg-white/5 hover:bg-white/10 text-emerald-300 font-medium text-sm transition-colors cursor-pointer whitespace-nowrap"
+              >
+                Car Collection (₦{nairaBalance.toLocaleString()})
+              </button>
+              <button
+                type="button"
                 onClick={onToggleTrackSelect}
                 className="w-full py-2 px-4 rounded-xl bg-white/5 hover:bg-white/10 text-slate-200 font-medium text-sm transition-colors cursor-pointer whitespace-nowrap"
               >
@@ -693,7 +780,7 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
           </div>
         )}
 
-        {!settingsOpen && !trackSelectOpen && !showPortraitPrompt && phase === 'countdown' && (
+        {!anyModalOpen && !showPortraitPrompt && phase === 'countdown' && (
           <div className="bg-[#0a0c10]/90 border border-white/15 rounded-2xl px-8 py-4 text-center shadow-2xl">
             <div className="text-xs font-medium text-slate-400 tracking-wider">Starting Grid</div>
             <div className="font-display text-6xl font-bold text-amber-400 tabular-nums mt-1">
@@ -702,7 +789,7 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
           </div>
         )}
 
-        {!settingsOpen && !trackSelectOpen && !showPortraitPrompt && phase === 'racing' && telemetry.wrongWay && (
+        {!anyModalOpen && !showPortraitPrompt && phase === 'racing' && telemetry.wrongWay && (
           <div className="bg-red-950/90 border border-red-500/60 rounded-xl px-6 py-2.5 text-center shadow-xl">
             <div className="font-display text-2xl font-bold text-red-400 tracking-wide">
               Wrong Way
@@ -710,7 +797,7 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
           </div>
         )}
 
-        {!settingsOpen && !trackSelectOpen && !showPortraitPrompt && phase === 'finished' && (
+        {!anyModalOpen && !showPortraitPrompt && phase === 'finished' && (
           <div className="pointer-events-auto bg-[#0a0c10]/95 border border-white/15 rounded-2xl p-5 sm:p-6 w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto shadow-2xl">
             <div className="flex items-baseline justify-between border-b border-white/10 pb-3 mb-4">
               <div>
@@ -738,7 +825,7 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
               </div>
             </div>
 
-            <div className="space-y-2 mb-5">
+            <div className="space-y-2 mb-4">
               {telemetry.standings.map((entry) => (
                 <div
                   key={entry.id}
@@ -769,7 +856,17 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
               ))}
             </div>
 
-            <div className="flex gap-2.5">
+            <div className="mb-4 rounded-xl bg-emerald-950/55 border border-emerald-500/35 px-3.5 py-2.5 flex items-center justify-between text-xs">
+              <span className="text-emerald-200 font-medium">
+                {telemetry.notesCollectedCount} road {telemetry.notesCollectedCount === 1 ? 'note' : 'notes'}
+                {telemetry.podiumBonusNaira > 0 ? ` + ₦${telemetry.podiumBonusNaira} podium bonus` : ''}
+              </span>
+              <span className="font-telemetry font-bold text-amber-300 tabular-nums">
+                +₦{telemetry.sessionNaira.toLocaleString()}
+              </span>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={onStartRace}
@@ -779,15 +876,22 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
               </button>
               <button
                 type="button"
-                onClick={onToggleTrackSelect}
-                className="py-2.5 px-4 rounded-xl bg-white/10 hover:bg-white/15 text-white font-medium text-sm transition-colors cursor-pointer whitespace-nowrap"
+                onClick={onToggleGarage}
+                className="py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition-colors cursor-pointer whitespace-nowrap"
               >
-                Change Track
+                Garage
+              </button>
+              <button
+                type="button"
+                onClick={onToggleTrackSelect}
+                className="py-2.5 px-3.5 rounded-xl bg-white/10 hover:bg-white/15 text-white font-medium text-sm transition-colors cursor-pointer whitespace-nowrap"
+              >
+                Tracks
               </button>
               <button
                 type="button"
                 onClick={onBackToGrid}
-                className="py-2.5 px-4 rounded-xl bg-white/10 hover:bg-white/15 text-white font-medium text-sm transition-colors cursor-pointer whitespace-nowrap"
+                className="py-2.5 px-3.5 rounded-xl bg-white/10 hover:bg-white/15 text-white font-medium text-sm transition-colors cursor-pointer whitespace-nowrap"
               >
                 Grid
               </button>
@@ -798,8 +902,8 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
 
       {/* Bottom Dock: Collapsible Control & Telemetry Bar */}
       <div className="flex flex-col items-center gap-2">
-        {/* Mouse Analog Steering Indicator */}
-        {phase === 'racing' && !settingsOpen && steeringInput === 'mouse' && (
+        {/* Mouse / Tilt Analog Steering Indicator */}
+        {phase === 'racing' && !anyModalOpen && !hideDesktopInputs && steeringInput === 'mouse' && (
           <div className="bg-[#0a0c10]/85 border border-white/10 rounded-full px-3 py-1.5 flex items-center gap-3 shadow-lg">
             <span className="text-[11px] text-slate-400 whitespace-nowrap">Mouse Steer</span>
             <div className="relative w-32 h-1.5 bg-white/10 rounded-full overflow-hidden">
@@ -813,31 +917,47 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
           </div>
         )}
 
-        {/* Touch / On-Screen Steering & Pedals during active race (portrait & landscape touch devices) */}
-        {showTouchControls && (
+        {/* Touch / On-Screen Pedals & Tilt Steering during active race */}
+        {showTouchPedals && (
           <div className="pointer-events-auto w-full flex justify-between items-end pb-1 touch-none select-none">
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onPointerDown={() => onTouchInput({ left: true })}
-                onPointerUp={() => onTouchInput({ left: false })}
-                onPointerCancel={() => onTouchInput({ left: false })}
-                onPointerLeave={() => onTouchInput({ left: false })}
-                className="w-14 h-12 sm:w-16 sm:h-14 rounded-xl bg-[#0a0c10]/85 border border-white/15 text-white font-bold text-lg active:bg-white/20 touch-none select-none"
-              >
-                L
-              </button>
-              <button
-                type="button"
-                onPointerDown={() => onTouchInput({ right: true })}
-                onPointerUp={() => onTouchInput({ right: false })}
-                onPointerCancel={() => onTouchInput({ right: false })}
-                onPointerLeave={() => onTouchInput({ right: false })}
-                className="w-14 h-12 sm:w-16 sm:h-14 rounded-xl bg-[#0a0c10]/85 border border-white/15 text-white font-bold text-lg active:bg-white/20 touch-none select-none"
-              >
-                R
-              </button>
-            </div>
+            {showTouchSteerButtons ? (
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onPointerDown={() => onTouchInput({ left: true })}
+                  onPointerUp={() => onTouchInput({ left: false })}
+                  onPointerCancel={() => onTouchInput({ left: false })}
+                  onPointerLeave={() => onTouchInput({ left: false })}
+                  className="w-14 h-12 sm:w-16 sm:h-14 rounded-xl bg-[#0a0c10]/85 border border-white/15 text-white font-bold text-lg active:bg-white/20 touch-none select-none"
+                >
+                  L
+                </button>
+                <button
+                  type="button"
+                  onPointerDown={() => onTouchInput({ right: true })}
+                  onPointerUp={() => onTouchInput({ right: false })}
+                  onPointerCancel={() => onTouchInput({ right: false })}
+                  onPointerLeave={() => onTouchInput({ right: false })}
+                  className="w-14 h-12 sm:w-16 sm:h-14 rounded-xl bg-[#0a0c10]/85 border border-white/15 text-white font-bold text-lg active:bg-white/20 touch-none select-none"
+                >
+                  R
+                </button>
+              </div>
+            ) : (
+              <div className="bg-[#0a0c10]/85 border border-white/15 rounded-xl px-3 py-2 flex items-center gap-2.5 shadow-lg">
+                <span className="text-[11px] font-medium text-slate-300 whitespace-nowrap">
+                  Tilt Steer
+                </span>
+                <div className="relative w-24 h-2 bg-white/10 rounded-full overflow-hidden">
+                  <div className="absolute left-1/2 top-0 bottom-0 w-px bg-white/35" />
+                  <div
+                    className="absolute top-0 bottom-0 w-3 -ml-1.5 rounded-full bg-emerald-400"
+                    style={{ left: `${50 - telemetry.steerAxis * 45}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="flex gap-2">
               <button
                 type="button"
@@ -901,7 +1021,7 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
                 {/* Livery Swatches */}
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-medium text-slate-400 whitespace-nowrap">
-                    Car
+                    Paint
                   </span>
                   <div className="flex items-center gap-1.5">
                     {LIVERY_OPTIONS.map((liv) => {
@@ -918,7 +1038,10 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
                               ? 'border-white scale-110'
                               : 'border-white/20 opacity-80 hover:opacity-100'
                           }`}
-                          style={{ backgroundColor: liv.primaryHex }}
+                          style={{
+                            backgroundColor:
+                              liv.id === 'factory' ? selectedCar.defaultPrimaryHex : liv.primaryHex,
+                          }}
                         />
                       );
                     })}
@@ -964,8 +1087,21 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
                   ))}
                 </div>
 
-                {/* Track Map Selector, Settings, Sound, Start */}
+                {/* Track Map Selector, Car Collection Garage, Settings, Sound, Start */}
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={onToggleGarage}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                      garageOpen
+                        ? 'bg-emerald-500 text-slate-950 font-semibold'
+                        : 'bg-emerald-950/70 border border-emerald-500/40 hover:bg-emerald-900/70 text-emerald-200'
+                    }`}
+                  >
+                    <CarFront className="w-4 h-4" />
+                    <span>{selectedCar.name}</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={onToggleTrackSelect}

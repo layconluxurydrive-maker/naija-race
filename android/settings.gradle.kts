@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "OpssyTracks"
+rootProject.name = "NAIJA-RUN"
 include(":app")
