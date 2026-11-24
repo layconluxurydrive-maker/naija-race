@@ -31,7 +31,6 @@ import {
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { GarageModal } from './GarageModal';
 import { Minimap } from './Minimap';
-import { PWAInstallButton } from './PWAInstallButton';
 
 interface RaceHUDProps {
   telemetry: RaceTelemetry;
@@ -705,7 +704,6 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
                   Done
                 </button>
               )}
-              <PWAInstallButton variant="settings" />
               <button
                 type="button"
                 onClick={() => {
@@ -1126,8 +1124,6 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
                     {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                     <span className="hidden sm:inline">{muted ? 'Muted' : 'Sound'}</span>
                   </button>
-
-                  <PWAInstallButton variant="dock" />
 
                   <button
                     type="button"

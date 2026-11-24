@@ -69,10 +69,15 @@ jobs:
           fi
           "$GRADLE_BIN" assembleDebug --no-daemon --stacktrace
 
-      - name: Rename APK for download
+      - name: Verify & Rename APK for download
         run: |
           mkdir -p release-apk
           cp android/app/build/outputs/apk/debug/app-debug.apk release-apk/NAIJA-RUN.apk
+          ls -lh release-apk/NAIJA-RUN.apk
+          APKSIGNER=$(command -v apksigner || find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name apksigner -type f 2>/dev/null | head -n 1 || true)
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --print-certs release-apk/NAIJA-RUN.apk
+          fi
 
       - name: Upload APK Workflow Artifact
         uses: actions/upload-artifact@v4
@@ -81,13 +86,15 @@ jobs:
           path: release-apk/NAIJA-RUN.apk
 
       - name: Publish APK to GitHub Releases
-        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0-latest
           name: NAIJA RUN (Android APK)
           body: |
             Automated Android APK build of NAIJA RUN.
-            Download `NAIJA-RUN.apk` below and open it on your Android phone to install.
+            Tap **NAIJA-RUN.apk** under Assets below on your Android phone to download and install directly.
+            (Note: If you download from Actions Artifacts instead of Releases, extract `NAIJA-RUN-APK.zip` first to get `NAIJA-RUN.apk`.)
           files: release-apk/NAIJA-RUN.apk
+          overwrite_files: true
+          fail_on_unmatched_files: true
           make_latest: true
